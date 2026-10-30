@@ -1,10 +1,17 @@
 """Процесс добавления интеграции А.М.Видео через UI.
 
 Повторяет сценарий входа приложения:
-1) type=login с телефоном, паролем и device_key;
-2) если сервер ответил change_device=true — требуется 4-значный PIN
-   устройства (его можно выслать по SMS, в приложении это кнопка
-   «Выслать PIN»: type=pin, pin_type=login, sms=1).
+1) пользователь вводит телефон и пароль;
+2) интеграция пытается войти (type=login без PIN); сервер отвечает
+   change_device=true — вход с нового устройства требует 4-значный PIN;
+3) интеграция САМА высылает PIN по SMS (type=pin, pin_type=device,
+   sms=0 — ровно как первое нажатие кнопки «Запросить ПИН» в приложении);
+4) пользователь вводит код из SMS — вход повторяется с PIN
+   (код действует ~3 минуты, повторная высылка — sms=1).
+
+device_key генерируется автоматически и сохраняется в записи: после
+первого успешного входа сервер запоминает устройство, и повторные
+входы проходят без PIN.
 """
 from __future__ import annotations
 
@@ -21,23 +28,27 @@ from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import voluptuous as vol
 
-from .api import AmVideoAuthError, AmVideoClient, AmVideoError, AmVideoPinRequired, random_device_key
+from .api import (
+    AmVideoAuthError,
+    AmVideoClient,
+    AmVideoError,
+    AmVideoPinRequired,
+    random_device_key,
+)
 from .const import (
-    CONF_BASE_URL,
     CONF_DEVICE_KEY,
     CONF_PIN,
     COOLDOWN,
-    DEFAULT_BASE_URL,
-    DEFAULT_COOLDOWN,
-    DEFAULT_OPEN_DURATION,
-    DEFAULT_OPENING_TIME,
-    DEFAULT_POLL_INTERVAL,
-    DEFAULT_STREAM_DURATION,
     DOMAIN,
     OPEN_DURATION,
     OPENING_TIME,
     SCAN_INTERVAL,
     STREAM_DURATION,
+    DEFAULT_COOLDOWN,
+    DEFAULT_OPEN_DURATION,
+    DEFAULT_OPENING_TIME,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_STREAM_DURATION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,16 +57,19 @@ STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
-        vol.Required(CONF_DEVICE_KEY, default=random_device_key()): str,
-        vol.Optional(CONF_PIN, default=""): str,
-        vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
     }
 )
 
 STEP_PIN_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_PIN): str,
-        vol.Required("send_sms", default=False): bool,
+        vol.Required("resend", default=False): bool,
+    }
+)
+
+STEP_REAUTH_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_PASSWORD): str,
     }
 )
 
@@ -102,66 +116,106 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         self.data: dict[str, Any] = {}
+        self._reauth_entry = None
 
+    # ------------------------------------------------------------------ #
+    # Высылка PIN по SMS (type=pin, как кнопка «Запросить ПИН»)
+    # ------------------------------------------------------------------ #
+    async def _send_pin(self, sms: str) -> tuple[bool, str]:
+        """Запросить PIN. Возвращает (успех, текст для пользователя)."""
+        client = AmVideoClient(
+            async_get_clientsession(self.hass),
+            login=self.data[CONF_USERNAME],
+            password=self.data[CONF_PASSWORD],
+            device_key=self.data.get(CONF_DEVICE_KEY),
+        )
+        try:
+            result = await client.request_pin_sms(pin_type="device", sms=sms)
+        except AmVideoError as err:
+            return False, f"Запрос PIN не выполнен: {err}"
+        if result.get("result"):
+            return True, str(
+                result.get("str")
+                or "ПИН отправлен по SMS. Введите код и отправьте форму."
+            )
+        # например: «Превышен лимит отправки ПИН (не более 3 в сутки)»
+        return False, str(result.get("str") or "Сервер не выслал PIN")
+
+    # ------------------------------------------------------------------ #
+    # Шаг 1: телефон + пароль
+    # ------------------------------------------------------------------ #
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        status = (
+            "Введите телефон (7XXXXXXXXXX) и пароль — те же, что в "
+            "приложении А.М.Видео. Если сервер потребует PIN для нового "
+            "устройства, интеграция сама вышлет код по SMS."
+        )
         if user_input is not None:
-            await self.async_set_unique_id(str(user_input[CONF_USERNAME]))
+            login = "".join(ch for ch in str(user_input[CONF_USERNAME]) if ch.isdigit())
+            await self.async_set_unique_id(login)
             self._abort_if_unique_id_configured()
             self.data = dict(user_input)
+            self.data[CONF_USERNAME] = login
+            self.data.setdefault(CONF_DEVICE_KEY, random_device_key())
+            self.data[CONF_PIN] = ""
             try:
                 await validate_login(self.hass, self.data)
             except AmVideoPinRequired:
+                # Новый код доставляется как в приложении — по SMS
+                ok, status = await self._send_pin(sms="0")
+                if ok:
+                    status = (
+                        f"{status} Введите код из SMS (действует ~3 минуты) "
+                        "и отправьте форму."
+                    )
+                    self.data["pin_status"] = status
+                    return await self.async_step_pin()
+                errors["base"] = "pin_request_failed"
+                self.data["pin_status"] = status
                 return await self.async_step_pin()
             except AmVideoAuthError as err:
                 errors["base"] = "invalid_auth"
+                status = f"Ошибка входа: {err}"
                 _LOGGER.debug("Ошибка входа: %s", err)
             except AmVideoError as err:
                 errors["base"] = "cannot_connect"
+                status = f"Нет связи с сервером: {err}"
                 _LOGGER.debug("Ошибка связи: %s", err)
             else:
+                # device_key сервер запомнил — вход без PIN; PIN не сохраняем
+                self.data[CONF_PIN] = ""
                 return self.async_create_entry(title="А.М.Видео", data=self.data)
-        return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=STEP_USER_SCHEMA,
+            errors=errors or None,
+            description_placeholders={"status": status},
+        )
 
+    # ------------------------------------------------------------------ #
+    # Шаг 2: PIN из SMS
+    # ------------------------------------------------------------------ #
     async def async_step_pin(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Двустадийный ввод PIN (как в приложении).
+        """Ввод PIN, высланного по SMS.
 
-        Шаг 1: галочка «Выслать PIN по SMS» — отправляем type=pin
-        (pin_type=device, как кнопка в приложении) и показываем ответ
-        сервера, НЕ пытаясь войти (новый PIN перезаписывает старый).
-        Шаг 2: пользователь вводит полученный код и отправляет форму без
-        галочки — выполняется вход с PIN (код живёт ~3 минуты).
+        Галочка «Выслать новый PIN» повторяет запрос (sms=1, как повторное
+        нажатие кнопки в приложении) и НЕ выполняет вход — новый PIN
+        перезаписывает предыдущий.
         """
         errors: dict[str, str] = {}
         status = str(
             self.data.get("pin_status")
-            or "Сервер требует PIN-код для входа с нового устройства. "
-            "Отметьте «Выслать PIN по SMS» и отправьте форму, дождитесь SMS, "
-            "затем введите код и отправьте форму ещё раз (без галочки)."
+            or "Введите PIN, высланный по SMS, и отправьте форму. "
+            "Если код не пришёл — отметьте «Выслать новый PIN»."
         )
         if user_input is not None:
-            if user_input.get("send_sms"):
-                client = AmVideoClient(
-                    async_get_clientsession(self.hass),
-                    login=self.data[CONF_USERNAME],
-                    password=self.data[CONF_PASSWORD],
-                    device_key=self.data.get(CONF_DEVICE_KEY),
-                )
-                try:
-                    result = await client.request_pin_sms(pin_type="device", sms="1")
-                except AmVideoError as err:
-                    status = f"Запрос PIN не выполнен: {err}"
-                    errors["base"] = "pin_request_failed"
+            if user_input.get("resend"):
+                ok, status = await self._send_pin(sms="1")
+                if ok:
+                    status = f"{status} Введите новый код и отправьте форму."
                 else:
-                    if result.get("result"):
-                        status = str(
-                            result.get("str")
-                            or "ПИН отправлен по SMS. Введите код и отправьте форму без галочки."
-                        )
-                    else:
-                        # например: «Превышен лимит отправки ПИН (не более 3 в сутки)»
-                        status = str(result.get("str") or "Сервер не выслал PIN")
-                        errors["base"] = "pin_request_failed"
+                    errors["base"] = "pin_request_failed"
             elif str(user_input.get(CONF_PIN, "")).strip():
                 self.data[CONF_PIN] = str(user_input[CONF_PIN]).strip()
                 try:
@@ -169,8 +223,8 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                 except AmVideoPinRequired as err:
                     errors["base"] = "invalid_pin"
                     status = (
-                        f"Сервер отклонил PIN: {err}. PIN действует ~3 минуты после "
-                        "отправки — запросите новый и введите его сразу."
+                        f"Сервер отклонил PIN: {err}. PIN действует ~3 минуты — "
+                        "запросите новый («Выслать новый PIN») и введите его сразу."
                     )
                 except AmVideoAuthError as err:
                     errors["base"] = "invalid_auth"
@@ -179,6 +233,14 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "cannot_connect"
                     status = f"Нет связи с сервером: {err}"
                 else:
+                    self.data[CONF_PIN] = ""
+                    if self._reauth_entry is not None:
+                        entry = self._reauth_entry
+                        self.hass.config_entries.async_update_entry(
+                            entry, data=self.data
+                        )
+                        await self.hass.config_entries.async_reload(entry.entry_id)
+                        return self.async_abort(reason="reauth_successful")
                     return self.async_create_entry(title="А.М.Видео", data=self.data)
         self.data["pin_status"] = status
         return self.async_show_form(
@@ -188,20 +250,36 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"status": status},
         )
 
+    # ------------------------------------------------------------------ #
+    # Reauth: пароль → (при необходимости) PIN
+    # ------------------------------------------------------------------ #
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        self._reauth_entry = self._get_reauth_entry()
         self.data = dict(entry_data)
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
-        status = "Сессия недействительна. Введите актуальный пароль."
+        status = (
+            "Сессия недействительна. Введите актуальный пароль — если сервер "
+            "потребует PIN, интеграция сама вышлет код по SMS."
+        )
         if user_input is not None:
-            self.data.update(user_input)
+            self.data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
+            self.data[CONF_PIN] = ""
             try:
                 await validate_login(self.hass, self.data)
-            except AmVideoPinRequired as err:
-                errors["base"] = "invalid_pin"
-                status = f"Сервер отклонил вход: {err}. Запросите PIN (шаг PIN) и повторите."
+            except AmVideoPinRequired:
+                ok, status = await self._send_pin(sms="0")
+                if ok:
+                    status = (
+                        f"{status} Введите код из SMS (действует ~3 минуты) "
+                        "и отправьте форму."
+                    )
+                else:
+                    errors["base"] = "pin_request_failed"
+                self.data["pin_status"] = status
+                return await self.async_step_pin()
             except AmVideoAuthError as err:
                 errors["base"] = "invalid_auth"
                 status = f"Ошибка входа: {err}"
@@ -209,19 +287,14 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
                 status = f"Нет связи с сервером: {err}"
             else:
-                entry = self._get_reauth_entry()
+                entry = self._reauth_entry
+                self.data[CONF_PIN] = ""
                 self.hass.config_entries.async_update_entry(entry, data=self.data)
                 await self.hass.config_entries.async_reload(entry.entry_id)
                 return self.async_abort(reason="reauth_successful")
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_PASSWORD, default=self.data.get(CONF_PASSWORD, "")): str,
-                vol.Optional(CONF_PIN, default=""): str,
-            }
-        )
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=schema,
+            data_schema=STEP_REAUTH_SCHEMA,
             errors=errors or None,
             description_placeholders={"status": status},
         )

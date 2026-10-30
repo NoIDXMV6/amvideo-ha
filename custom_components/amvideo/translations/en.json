@@ -3,61 +3,57 @@
     "step": {
       "user": {
         "title": "А.М.Видео — вход",
-        "description": "Укажите те же данные, что и в приложении А.М.Видео. Телефон в формате 7XXXXXXXXXX.",
+        "description": "{status}",
         "data": {
-          "username": "Телефон (логин)",
-          "password": "Пароль",
-          "device_key": "device_key (уникальный идентификатор устройства, оставьте сгенерированный)",
-          "pin": "PIN устройства (если запрашивается при входе с нового устройства)",
-          "base_url": "API base URL (keep the default value)"
+          "username": "Phone (7XXXXXXXXXX)",
+          "password": "Password"
         }
       },
       "pin": {
-        "title": "Требуется PIN устройства",
+        "title": "PIN from SMS",
         "description": "{status}",
         "data": {
-          "pin": "PIN (4 цифры)",
-          "send_sms": "Выслать новый PIN по SMS (шаг 1; затем введите код и отправьте форму ещё раз)"
+          "pin": "PIN from SMS (4 digits)",
+          "resend": "Send a new PIN by SMS"
         }
       },
       "reauth_confirm": {
-        "title": "А.М.Видео — обновить вход",
+        "title": "А.М.Видео — re-authentication",
         "description": "{status}",
         "data": {
-          "password": "Пароль",
-          "pin": "PIN устройства (если требуется)"
+          "password": "Password"
         }
       }
     },
     "error": {
-      "invalid_auth": "Неверный логин или пароль",
-      "invalid_pin": "Сервер отклонил PIN (подробности выше)",
-      "cannot_connect": "Нет связи с сервером lk.amvideo-msk.ru",
-      "pin_request_failed": "Не удалось выслать PIN (подробности выше)"
+      "invalid_auth": "Invalid login or password",
+      "invalid_pin": "Server rejected the PIN (see details above)",
+      "cannot_connect": "Cannot reach lk.amvideo-msk.ru",
+      "pin_request_failed": "Failed to send the PIN (see details above)"
     },
     "abort": {
-      "already_configured": "Этот аккаунт уже добавлен",
-      "reauth_successful": "Вход обновлён"
+      "already_configured": "This account is already configured",
+      "reauth_successful": "Login refreshed"
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Настройки А.М.Видео",
+        "title": "А.М.Видео options",
         "data": {
-          "scan_interval": "Интервал опроса сервера, сек",
-          "opening_time": "Время «открывается» после команды, сек",
-          "open_duration": "Сколько секунд считается «открыто», сек",
-          "cooldown": "Пауза между командами открытия, сек",
-          "stream_duration": "Максимальная длительность живого видео, сек"
+          "scan_interval": "Server poll interval, sec",
+          "opening_time": "«Opening» time after the command, sec",
+          "open_duration": "Seconds the barrier counts as «open», sec",
+          "cooldown": "Pause between open commands, sec",
+          "stream_duration": "Max live video duration, sec"
         }
       }
     }
   },
   "services": {
     "open_barrier": {
-      "name": "Открыть шлагбаум",
-      "description": "Отправляет серверу А.М.Видео команду открытия КПУ"
+      "name": "Open the barrier",
+      "description": "Sends the open command to the А.М.Видео server"
     }
   }
 }

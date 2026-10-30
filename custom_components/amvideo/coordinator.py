@@ -19,7 +19,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import AmVideoAuthError, AmVideoClient, AmVideoError
+from .api import AmVideoAuthError, AmVideoClient, AmVideoError, AmVideoPinRequired
 from .const import (
     CONF_BASE_URL,
     CONF_DEVICE_KEY,
@@ -92,6 +92,12 @@ class AmVideoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 panels = await self.client.get_panels()
         except AmVideoAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
+        except AmVideoPinRequired as err:
+            # сервер забыл устройство — нужен PIN: ведём пользователя в reauth,
+            # где интеграция сама вышлет новый код по SMS
+            raise ConfigEntryAuthFailed(
+                f"Сервер требует PIN устройства: {err}. Обновите вход."
+            ) from err
         except AmVideoError as err:
             raise UpdateFailed(str(err)) from err
         return {"panels": panels}

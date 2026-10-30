@@ -3,29 +3,25 @@
     "step": {
       "user": {
         "title": "А.М.Видео — вход",
-        "description": "Укажите те же данные, что и в приложении А.М.Видео. Телефон в формате 7XXXXXXXXXX.",
+        "description": "{status}",
         "data": {
-          "username": "Телефон (логин)",
-          "password": "Пароль",
-          "device_key": "device_key (уникальный идентификатор устройства, оставьте сгенерированный)",
-          "pin": "PIN устройства (если запрашивается при входе с нового устройства)",
-          "base_url": "Адрес API (оставьте значение по умолчанию)"
+          "username": "Телефон (7XXXXXXXXXX)",
+          "password": "Пароль"
         }
       },
       "pin": {
-        "title": "Требуется PIN устройства",
+        "title": "PIN из SMS",
         "description": "{status}",
         "data": {
-          "pin": "PIN (4 цифры)",
-          "send_sms": "Выслать новый PIN по SMS (шаг 1; затем введите код и отправьте форму ещё раз)"
+          "pin": "PIN из SMS (4 цифры)",
+          "resend": "Выслать новый PIN по SMS"
         }
       },
       "reauth_confirm": {
         "title": "А.М.Видео — обновить вход",
         "description": "{status}",
         "data": {
-          "password": "Пароль",
-          "pin": "PIN устройства (если требуется)"
+          "password": "Пароль"
         }
       }
     },
