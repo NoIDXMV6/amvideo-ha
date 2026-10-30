@@ -1,9 +1,18 @@
 """Координатор данных интеграции А.М.Видео.
 
-Опрашивает сервер (type=panels) и поддерживает сессию:
-если sid истёк — автоматически выполняет повторный login по сохранённым
-реквизитам. Здесь же хранится время последней команды открытия для
-реализации антидребезга (в приложении — 20 секунд).
+Опрашивает сервер (type=panels) и бережно относится к сессии: сервер
+держит одну активную сессию на аккаунт, поэтому каждый повторный login
+завершает сессию приложения на телефоне. Интеграция:
+
+  - переиспользует sid, сохранённый в записи конфигурации;
+  - держит сессию живой keep-alive-запросом type=auth раз в 55 минут
+    (как приложение, которое посылает type=auth раз в час);
+  - НИКОГДА не выполняет login автоматически: если сервер ответил
+    «нет доступа», поднимается ConfigEntryAuthFailed — HA предлагает
+    повторную авторизацию в настройках интеграции.
+
+Здесь же хранится время последней команды открытия для реализации
+антидребезга (в приложении — 20 секунд).
 """
 from __future__ import annotations
 
@@ -24,6 +33,8 @@ from .const import (
     CONF_BASE_URL,
     CONF_DEVICE_KEY,
     CONF_PIN,
+    CONF_RESERVE_URL,
+    CONF_SID,
     CONF_STREAM_HOST,
     COOLDOWN,
     DEFAULT_BASE_URL,
@@ -32,6 +43,7 @@ from .const import (
     DEFAULT_OPENING_TIME,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
+    KEEPALIVE_INTERVAL,
     OPEN_DURATION,
     OPENING_TIME,
     SCAN_INTERVAL,
@@ -54,9 +66,12 @@ class AmVideoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             pin=entry.data.get(CONF_PIN, ""),
             base_url=entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL),
             stream_host=entry.data.get(CONF_STREAM_HOST, STREAM_HOST_TEMPLATE),
+            sid=entry.data.get(CONF_SID),
+            reserve_url=entry.data.get(CONF_RESERVE_URL),
         )
         self.entry = entry
         self.last_open: dict[str, float] = {}
+        self._last_keepalive: float = 0.0
 
         interval = entry.options.get(SCAN_INTERVAL, DEFAULT_POLL_INTERVAL)
         super().__init__(
@@ -81,17 +96,32 @@ class AmVideoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ------------------------------------------------------------------ #
     async def _async_update_data(self) -> dict[str, Any]:
-        """Опрос сервера с автоповтором входа при истёкшей сессии."""
+        """Опрос сервера; login выполняется ТОЛЬКО вручную (reauth).
+
+        Сессия поддерживается keep-alive (type=auth раз в 55 минут, как
+        в приложении). Если сервер ответил «нет доступа» — значит, сессию
+        перехватил свежий вход (например, вход в приложение на телефоне)
+        либо истёк срок: поднимаем ConfigEntryAuthFailed, HA покажет
+        «Требуется повторная авторизация». Автоматический вход запрещён
+        специально: он завершал бы сессию приложения на телефоне.
+        """
         try:
-            try:
-                panels = await self.client.get_panels()
-            except AmVideoAuthError:
-                _LOGGER.info("Сессия истекла — повторный вход")
-                await self.client.login()
-                await self.client.auth()
-                panels = await self.client.get_panels()
+            if self.client.sid and time.time() - self._last_keepalive > KEEPALIVE_INTERVAL:
+                try:
+                    await self.client.auth()
+                    self._last_keepalive = time.time()
+                except AmVideoAuthError:
+                    # sid мёртв — ниже panels это подтвердит и поднимет reauth
+                    _LOGGER.debug("Keep-alive: сессия недействительна")
+            panels = await self.client.get_panels()
+            self._last_keepalive = time.time()
         except AmVideoAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
+            raise ConfigEntryAuthFailed(
+                "Сессия А.М.Видео недействительна: "
+                f"{err}. Откройте «Настройки → А.М.Видео → Повторная авторизация». "
+                "Учтите: новый вход интеграции завершает сессию в приложении "
+                "на телефоне — после него приложение попросит войти заново."
+            ) from err
         except AmVideoPinRequired as err:
             # сервер забыл устройство — нужен PIN: ведём пользователя в reauth,
             # где интеграция сама вышлет новый код по SMS

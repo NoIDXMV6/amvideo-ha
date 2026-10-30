@@ -33,13 +33,21 @@
     },
     "abort": {
       "already_configured": "This account is already configured",
-      "reauth_successful": "Login refreshed"
+      "reauth_successful": "Login refreshed",
+      "reauth_started": "Opening re-authentication — fill in the login form"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "А.М.Видео options",
+        "menu_options": {
+          "options": "Polling and timing options",
+          "reauth": "Re-authenticate (new login)"
+        }
+      },
+      "options": {
+        "title": "Polling and timing options",
         "data": {
           "scan_interval": "Server poll interval, sec",
           "opening_time": "«Opening» time after the command, sec",

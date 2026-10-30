@@ -68,6 +68,8 @@ class AmVideoClient:
         pin: str = "",
         base_url: str = DEFAULT_BASE_URL,
         stream_host: str = STREAM_HOST_TEMPLATE,
+        sid: str | None = None,
+        reserve_url: str | None = None,
     ) -> None:
         self._session = session
         self._login = "".join(ch for ch in str(login) if ch.isdigit())
@@ -77,8 +79,12 @@ class AmVideoClient:
         self._base_url = base_url
         self._stream_host = stream_host
 
-        self.sid: str | None = None
-        self.reserve_url: str | None = None
+        # Сессия может быть восстановлена из сохранённой записи: сервер
+        # А.М.Видео держит одну активную сессию на аккаунт, поэтому каждый
+        # повторный login завершает сессию приложения на телефоне.
+        # Клиент переиспользует sid до тех пор, пока сервер его принимает.
+        self.sid: str | None = sid
+        self.reserve_url: str | None = reserve_url
         self.profile: dict[str, Any] = {}
 
     # ------------------------------------------------------------------ #

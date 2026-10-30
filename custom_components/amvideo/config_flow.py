@@ -38,6 +38,8 @@ from .api import (
 from .const import (
     CONF_DEVICE_KEY,
     CONF_PIN,
+    CONF_RESERVE_URL,
+    CONF_SID,
     COOLDOWN,
     DOMAIN,
     OPEN_DURATION,
@@ -95,7 +97,7 @@ OPTIONS_SCHEMA = vol.Schema(
 
 
 async def validate_login(hass, data: dict[str, Any]) -> AmVideoClient:
-    """Попытка входа; возвращает рабочий клиент."""
+    """Попытка входа; возвращает клиент с полученным sid."""
     session = async_get_clientsession(hass)
     client = AmVideoClient(
         session,
@@ -106,6 +108,12 @@ async def validate_login(hass, data: dict[str, Any]) -> AmVideoClient:
     )
     await client.login()
     await client.auth()
+    # Запоминаем сессию и резервный адрес: после рестарта HA интеграция
+    # продолжит работать по этому sid без повторного login (который
+    # завершил бы сессию приложения на телефоне).
+    data[CONF_SID] = client.sid
+    if client.reserve_url:
+        data[CONF_RESERVE_URL] = client.reserve_url
     return client
 
 
@@ -149,7 +157,10 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
         status = (
             "Введите телефон (7XXXXXXXXXX) и пароль — те же, что в "
             "приложении А.М.Видео. Если сервер потребует PIN для нового "
-            "устройства, интеграция сама вышлет код по SMS."
+            "устройства, интеграция сама вышлет код по SMS. "
+            "Обратите внимание: сервер держит одну активную сессию на "
+            "аккаунт, поэтому после входа интеграции приложение на телефоне "
+            "попросит войти заново — это нормально, дальше они работают параллельно."
         )
         if user_input is not None:
             login = "".join(ch for ch in str(user_input[CONF_USERNAME]) if ch.isdigit())
@@ -261,8 +272,12 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         status = (
-            "Сессия недействительна. Введите актуальный пароль — если сервер "
-            "потребует PIN, интеграция сама вышлет код по SMS."
+            "Сессия недействительна (срок истёк либо её перехватил свежий "
+            "вход — например, вход в приложение на телефоне). Введите "
+            "актуальный пароль для нового входа. Если сервер потребует "
+            "PIN, интеграция сама вышлет код по SMS. "
+            "Внимание: после этого входа приложение на телефоне попросит "
+            "авторизоваться заново — это ограничение сервера А.М.Видео."
         )
         if user_input is not None:
             self.data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
@@ -306,9 +321,14 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class AmVideoOptionsFlow(OptionsFlow):
-    """Настройки опроса и таймингов."""
+    """Меню: параметры опроса и повторная авторизация без удаления."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Меню настроек интеграции."""
+        return self.async_show_menu(step_id="init", menu_options=["options", "reauth"])
+
+    async def async_step_options(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Параметры опроса и таймингов."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
         options = self.config_entry.options
@@ -320,6 +340,27 @@ class AmVideoOptionsFlow(OptionsFlow):
             STREAM_DURATION: options.get(STREAM_DURATION, DEFAULT_STREAM_DURATION),
         }
         return self.async_show_form(
-            step_id="init",
+            step_id="options",
             data_schema=self.add_suggested_values_to_schema(OPTIONS_SCHEMA, defaults),
         )
+
+    async def async_step_reauth(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Запустить повторную авторизацию без удаления интеграции."""
+        entry = self.config_entry
+        try:
+            # HA ≥ 2024.2: штатный запуск reauth-flow (с дедупликацией)
+            entry.async_start_reauth(self.hass)
+        except AttributeError:
+            self.hass.async_create_task(
+                self.hass.config_entries.flow.async_init(
+                    DOMAIN,
+                    context={
+                        "source": "reauth",
+                        "entry_id": entry.entry_id,
+                        "unique_id": entry.unique_id,
+                        "title_placeholders": {},
+                    },
+                    data=entry.data,
+                )
+            )
+        return self.async_abort(reason="reauth_started")
