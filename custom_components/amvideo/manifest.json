@@ -1,0 +1,20 @@
+{
+  "domain": "amvideo",
+  "name": "А.М.Видео (шлагбаумы)",
+  "codeowners": [
+    "@NoIDXMV6"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "camera"
+  ],
+  "documentation": "https://github.com/NoIDXMV6/amvideo-ha",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/NoIDXMV6/amvideo-ha/issues",
+  "loggers": [
+    "custom_components.amvideo"
+  ],
+  "requirements": [],
+  "version": "1.0.0"
+}

@@ -1,0 +1,9 @@
+open_barrier:
+  name: Открыть шлагбаум
+  description: >-
+    Отправляет серверу А.М.Видео команду открытия КПУ (type=open).
+    Повторные команды ограничены интервалом (по умолчанию 20 с).
+  target:
+    entity:
+      integration: amvideo
+      domain: [button, cover]
