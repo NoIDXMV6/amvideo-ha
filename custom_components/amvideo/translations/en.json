@@ -14,15 +14,15 @@
       },
       "pin": {
         "title": "Требуется PIN устройства",
-        "description": "Сервер требует PIN-код для входа с нового устройства. Поставьте галочку, чтобы выслать PIN по SMS.",
+        "description": "{status}",
         "data": {
           "pin": "PIN (4 цифры)",
-          "send_sms": "Выслать PIN по SMS"
+          "send_sms": "Выслать новый PIN по SMS (шаг 1; затем введите код и отправьте форму ещё раз)"
         }
       },
       "reauth_confirm": {
         "title": "А.М.Видео — обновить вход",
-        "description": "Сессия недействительна. Введите актуальный пароль.",
+        "description": "{status}",
         "data": {
           "password": "Пароль",
           "pin": "PIN устройства (если требуется)"
@@ -31,8 +31,9 @@
     },
     "error": {
       "invalid_auth": "Неверный логин или пароль",
-      "invalid_pin": "Неверный PIN устройства",
-      "cannot_connect": "Нет связи с сервером lk.amvideo-msk.ru"
+      "invalid_pin": "Сервер отклонил PIN (подробности выше)",
+      "cannot_connect": "Нет связи с сервером lk.amvideo-msk.ru",
+      "pin_request_failed": "Не удалось выслать PIN (подробности выше)"
     },
     "abort": {
       "already_configured": "Этот аккаунт уже добавлен",

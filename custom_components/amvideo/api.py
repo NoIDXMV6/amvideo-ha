@@ -137,8 +137,13 @@ class AmVideoClient:
             raise AmVideoPinRequired(str(result.get("str") or "Требуется PIN"))
         raise AmVideoAuthError(str(result.get("str") or "Неверный логин или пароль"))
 
-    async def request_pin_sms(self, pin_type: str = "login", sms: str = "1") -> dict[str, Any]:
-        """type=pin — запросить PIN по SMS (как кнопка «выслать PIN»)."""
+    async def request_pin_sms(self, pin_type: str = "device", sms: str = "1") -> dict[str, Any]:
+        """type=pin — запросить PIN по SMS (как кнопка «выслать PIN»).
+
+        В приложении кнопка на экране входа шлёт pin_type="device"
+        (data-pintype="device" в index.html). Ответ сервера содержит
+        result и человекочитаемый str — его проверяет config_flow.
+        """
         return await self._request(
             "pin", login=self._login, pin_type=pin_type, sms=sms
         )
