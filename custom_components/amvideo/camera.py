@@ -89,8 +89,9 @@ class AmVideoCamera(Camera):
         session = async_get_clientsession(coordinator.hass)
         self._stream = BarrierStream(
             session,
-            get_port=lambda: coordinator.client.get_video_port(id_shlag),
-            stream_url_for_port=coordinator.client.stream_url,
+            # type=video теперь возвращает цель "порт/токен" (протокол 2026)
+            get_target=lambda: coordinator.client.get_video_target(id_shlag),
+            stream_url_for_target=coordinator.client.stream_url,
             max_duration=coordinator.entry.options.get(
                 STREAM_DURATION, DEFAULT_STREAM_DURATION
             ),
@@ -108,6 +109,7 @@ class AmVideoCamera(Camera):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        target = self._stream.last_target or ""
         return {
             "id_shlag": self._panel.get("id_shlag"),
             "adress": self._panel.get("adress"),
@@ -117,6 +119,9 @@ class AmVideoCamera(Camera):
             "stream_tls_verify": self._coordinator.entry.options.get(
                 CONF_STREAM_SSL_VERIFY, DEFAULT_STREAM_SSL_VERIFY
             ),
+            "video_port": target.split("/", 1)[0] or None,
+            "frames_seen": self._stream.frames_seen,
+            "last_error": self._stream.last_error,
         }
 
     @property

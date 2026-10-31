@@ -131,24 +131,24 @@ async def _read_frames(
 class BarrierStream:
     """Живой видеопоток одного шлагбаума.
 
-    get_port — колбэк, запрашивающий у API свежий порт WSS-прокси
-    (type=video). Порт выдаётся под сессию и живёт ограниченное время,
-    поэтому при обрыве поток запрашивается заново.
+    get_target — колбэк, запрашивающий у API цель WSS-прокси (type=video):
+    "порт" либо "порт/токен" (протокол 2026). Цель выдаётся под сессию и
+    живёт ограниченное время, поэтому при обрыве поток запрашивается заново.
     """
 
     def __init__(
         self,
         session: aiohttp.ClientSession,
-        get_port: Callable[[], Awaitable[int]],
-        stream_url_for_port: Callable[[int], str],
+        get_target: Callable[[], Awaitable[str]],
+        stream_url_for_target: Callable[[str], str],
         max_duration: float = 600,
         snapshot_cache: float = DEFAULT_SNAPSHOT_CACHE,
         ssl_verify: bool = False,
         first_frame_timeout: float = DEFAULT_FIRST_FRAME_TIMEOUT,
     ) -> None:
         self._session = session
-        self._get_port = get_port
-        self._url_for = stream_url_for_port
+        self._get_target = get_target
+        self._url_for = stream_url_for_target
         self._max_duration = max_duration
         self._snapshot_cache = snapshot_cache
         # Сертификат видеопрокси не покрывает имя stream.amvideo-msk.ru,
@@ -158,14 +158,19 @@ class BarrierStream:
 
         self._last_frame: bytes | None = None
         self._last_frame_ts = 0.0
+        # диагностика последней попытки (для атрибутов камеры)
+        self.last_target: str | None = None
+        self.last_error: str | None = None
+        self.frames_seen: int = 0
 
     # ------------------------------------------------------------------ #
     async def _run_pipeline(
         self, deadline: float
     ) -> AsyncIterator[bytes]:
-        """Одно подключение: запросить порт → WS → ffmpeg → кадры."""
-        port = await self._get_port()
-        url = self._url_for(port)
+        """Одно подключение: запросить цель → WS → ffmpeg → кадры."""
+        target = await self._get_target()
+        self.last_target = str(target)
+        url = self._url_for(target)
         _LOGGER.debug("Подключение к видеопрокси: %s", url)
 
         if not ffmpeg_available():
@@ -186,6 +191,7 @@ class BarrierStream:
                 ):
                     self._last_frame = frame
                     self._last_frame_ts = time.monotonic()
+                    self.frames_seen += 1
                     yield frame
             finally:
                 pump.cancel()
@@ -218,6 +224,7 @@ class BarrierStream:
                         attempts = 0
                     yield frame
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as err:
+                self.last_error = f"{type(err).__name__}: {err}"
                 warn_limited(
                     _LOGGER,
                     f"frames_err_{id(self)}",
@@ -226,7 +233,8 @@ class BarrierStream:
                     err,
                 )
             except AmVideoError as err:
-                # сервер не выдал порт / «нет доступа» / нет связи при
+                self.last_error = str(err)
+                # сервер не выдал цель / «нет доступа» / нет связи при
                 # запросе type=video — раньше это умирало на DEBUG и окно
                 # камеры пустело без единой записи в журнале
                 warn_limited(
@@ -258,7 +266,10 @@ class BarrierStream:
                     time.monotonic() + timeout
                 ):
                     return frame
-        except (TimeoutError, aiohttp.ClientError, OSError, RuntimeError) as err:
+        except (
+            TimeoutError, aiohttp.ClientError, OSError, RuntimeError, AmVideoError
+        ) as err:
+            self.last_error = f"{type(err).__name__}: {err}"
             warn_limited(
                 _LOGGER,
                 f"snapshot_err_{id(self)}",

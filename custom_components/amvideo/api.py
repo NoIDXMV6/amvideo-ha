@@ -206,12 +206,20 @@ class AmVideoClient:
             raise AmVideoError(str(result.get("str") or "Шлагбаум не открылся"))
         return result
 
-    async def get_video_port(self, id_shlag: int | str, type_device: str = "panel") -> int:
-        """type=video — порт WSS-прокси живого потока (MPEG1-TS).
+    async def get_video_target(self, id_shlag: int | str, type_device: str = "panel") -> str:
+        """type=video — цель WSS-прокси живого потока (MPEG1-TS).
 
-        Ответ сервера: {status: "ok", wssport: [<порт>]}.
-        Подключение: wss://stream.amvideo-msk.ru:<порт> — сервер сразу
-        начинает слать бинарный MPEG1-TS (клиент jsmpeg ничего не отправляет).
+        Сервер отвечает {status: "ok", wssport: [<цель>]}, где цель —
+        строка в одном из форматов:
+
+          "11001"             — только порт (старый протокол): поток на
+                                wss://stream.amvideo-msk.ru:11001;
+          "7077/KFVyuAbAeS"   — порт + одноразовый токен в пути (протокол
+                                с обновления сервера 2026): поток на
+                                wss://stream.amvideo-msk.ru:7077/KFVyuAbAeS.
+
+        Возвращает нормализованную цель: "порт" либо "порт/путь"
+        (полный URL, если сервер вдруг прислал его целиком).
         """
         result = await self._request(
             "video",
@@ -223,21 +231,29 @@ class AmVideoClient:
         if result.get("status") == "ok":
             ports = result.get("wssport") or []
             if ports:
-                return int(ports[0])
+                raw = str(ports[0]).strip()
+                if "://" in raw:  # сервер прислал полный URL
+                    return raw
+                return raw.lstrip("/")  # "7077", "7077/KFVyuAbAeS"…
         raise AmVideoError(
             str(result.get("str") or "Камера недоступна (сервер не выдал порт)")
         )
 
-    def stream_url(self, port: int) -> str:
-        """Собрать URL WSS-потока из порта.
+    def stream_url(self, target: str) -> str:
+        """Собрать URL WSS-потока из цели (порт или порт/токен).
 
-        Если в адресе есть шаблон {port} (например ws://host:{port}/ws),
-        он подставляется; иначе порт дописывается через двоеточие
-        (wss://stream.amvideo-msk.ru:<порт>), как делает приложение.
+        Если в адресе есть шаблон {port}, цель подставляется в него
+        (wss://stream.amvideo-msk.ru:{port} →
+        wss://stream.amvideo-msk.ru:7077/KFVyuAbAeS); иначе цель
+        дописывается через двоеточие, как делает приложение.
+        Полный URL (с "://") возвращается как есть.
         """
+        target = str(target).strip()
+        if "://" in target:
+            return target
         if "{port}" in self._stream_host:
-            return self._stream_host.format(port=port)
-        return f"{self._stream_host}:{port}"
+            return self._stream_host.format(port=target)
+        return f"{self._stream_host}:{target}"
 
     @property
     def stream_host(self) -> str:
