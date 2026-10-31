@@ -239,6 +239,12 @@ class AmVideoClient:
             return self._stream_host.format(port=port)
         return f"{self._stream_host}:{port}"
 
+    @property
+    def stream_host(self) -> str:
+        """Хост WSS-прокси без схемы и порта (для атрибутов камеры)."""
+        host = self._stream_host.split("://", 1)[-1]
+        return host.split(":", 1)[0].split("/", 1)[0]
+
     # ------------------------------------------------------------------ #
     # Архив (справочно; в интеграции пока не используется)
     # ------------------------------------------------------------------ #

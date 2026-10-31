@@ -25,7 +25,10 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    CONF_STREAM_SSL_VERIFY,
+    DEFAULT_FIRST_FRAME_TIMEOUT,
     DEFAULT_STREAM_DURATION,
+    DEFAULT_STREAM_SSL_VERIFY,
     DOMAIN,
     MANUFACTURER,
     MODEL_BARRIER,
@@ -91,6 +94,12 @@ class AmVideoCamera(Camera):
             max_duration=coordinator.entry.options.get(
                 STREAM_DURATION, DEFAULT_STREAM_DURATION
             ),
+            # сертификат видеопрокси не покрывает имя stream.amvideo-msk.ru,
+            # поэтому по умолчанию TLS не проверяется (как в приложении)
+            ssl_verify=coordinator.entry.options.get(
+                CONF_STREAM_SSL_VERIFY, DEFAULT_STREAM_SSL_VERIFY
+            ),
+            first_frame_timeout=DEFAULT_FIRST_FRAME_TIMEOUT,
         )
 
     @property
@@ -103,6 +112,11 @@ class AmVideoCamera(Camera):
             "id_shlag": self._panel.get("id_shlag"),
             "adress": self._panel.get("adress"),
             "stream_type": "MPEG1-TS over WebSocket (jsmpeg)",
+            "ffmpeg_available": ffmpeg_available(),
+            "stream_host": self._coordinator.client.stream_host,
+            "stream_tls_verify": self._coordinator.entry.options.get(
+                CONF_STREAM_SSL_VERIFY, DEFAULT_STREAM_SSL_VERIFY
+            ),
         }
 
     @property
@@ -166,7 +180,16 @@ class AmVideoCamera(Camera):
         except (ConnectionResetError, ConnectionError):
             _LOGGER.debug("Клиент отключился от потока %s", self.entity_id)
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Поток %s прерван: %s", self.entity_id, err)
+            # причина пустого окна должна быть видна в журнале, а не
+            # только при включённом debug-режиме
+            warn_limited(
+                _LOGGER,
+                f"mjpeg_{self._id_shlag}",
+                "Поток камеры %s остановлен: %s: %s",
+                self._panel.get("adress"),
+                type(err).__name__,
+                err,
+            )
         finally:
             try:
                 await response.write_eof()

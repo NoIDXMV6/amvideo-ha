@@ -22,6 +22,17 @@ STREAM_WS_HOST = "wss://stream.amvideo-msk.ru"
 STREAM_HOST_TEMPLATE = "wss://stream.amvideo-msk.ru:{port}"
 DEFAULT_TIMEOUT = 30
 
+# TLS видеопрокси: сертификат stream.amvideo-msk.ru выпущен на
+# unity-nvr.amvideo-msk.ru и не покрывает имя хоста, приложение А.М.Видео
+# его не проверяет — по умолчанию не проверяем тоже (иначе aiohttp рвёт
+# соединение до первого байта видео).
+CONF_STREAM_SSL_VERIFY = "stream_ssl_verify"
+DEFAULT_STREAM_SSL_VERIFY = False
+
+# Watchdog первого кадра: если после подключения к WSS сервер не передаёт
+# данных дольше этого времени — переподключение + WARNING в журнал.
+DEFAULT_FIRST_FRAME_TIMEOUT = 25.0
+
 # Keep-alive сессии (type=auth) — как в приложении: раз в час активности.
 KEEPALIVE_INTERVAL = 3300  # 55 минут
 

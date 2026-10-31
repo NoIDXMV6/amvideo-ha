@@ -4,6 +4,12 @@
 бинарный поток MPEG1-TS (клиент jsmpeg в приложении ничего не отправляет
 и автоматически отключается через 60 секунд).
 
+TLS видеопрокси НЕ проверяется (ssl=False по умолчанию): сертификат,
+который отдаёт stream.amvideo-msk.ru, выпущен на unity-nvr.amvideo-msk.ru
+(проверено openssl, 2026-11), а приложение А.М.Видео эту проверку не
+выполняет — с проверкой по умолчанию aiohttp рвал соединение до первого
+байта видео (пустое окно камеры без ошибок в журнале).
+
 Модуль не зависит от Home Assistant.
 """
 from __future__ import annotations
@@ -16,7 +22,8 @@ from typing import AsyncIterator, Awaitable, Callable
 
 import aiohttp
 
-from .const import DEFAULT_SNAPSHOT_CACHE
+from .api import AmVideoError
+from .const import DEFAULT_FIRST_FRAME_TIMEOUT, DEFAULT_SNAPSHOT_CACHE
 from .diag import warn_limited
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,13 +80,38 @@ async def _pump_ws_to_stdin(ws: aiohttp.ClientWebSocketResponse, stdin: asyncio.
             pass
 
 
-async def _read_frames(stdout: asyncio.StreamReader, deadline: float) -> AsyncIterator[bytes]:
-    """Разбивать stdout ffmpeg на отдельные JPEG-кадры (SOI…EOI)."""
+async def _read_frames(
+    stdout: asyncio.StreamReader,
+    deadline: float,
+    first_frame_timeout: float | None = None,
+) -> AsyncIterator[bytes]:
+    """Разбивать stdout ffmpeg на отдельные JPEG-кадры (SOI…EOI).
+
+    first_frame_timeout — watchdog: если за это время от сервера не
+    пришло НИ ОДНОГО байта (WS подключился, но данных нет), бросаем
+    TimeoutError — иначе MJPEG-поток висел бы молча, а пользователь
+    видел бы пустое окно без единой записи в журнале.
+    """
     buf = b""
+    got_data = False
     while time.monotonic() < deadline:
-        chunk = await stdout.read(65536)
+        remaining = deadline - time.monotonic()
+        if not got_data and first_frame_timeout is not None:
+            remaining = min(remaining, first_frame_timeout)
+        try:
+            chunk = await asyncio.wait_for(
+                stdout.read(65536), timeout=max(remaining, 0.1)
+            )
+        except asyncio.TimeoutError:
+            if not got_data and first_frame_timeout is not None:
+                raise asyncio.TimeoutError(
+                    f"сервер не передаёт видеоданные: за "
+                    f"{first_frame_timeout:.0f} с не пришло ни одного байта"
+                ) from None
+            return
         if not chunk:
             return
+        got_data = True
         buf += chunk
         while True:
             start = buf.find(_SOI)
@@ -111,12 +143,18 @@ class BarrierStream:
         stream_url_for_port: Callable[[int], str],
         max_duration: float = 600,
         snapshot_cache: float = DEFAULT_SNAPSHOT_CACHE,
+        ssl_verify: bool = False,
+        first_frame_timeout: float = DEFAULT_FIRST_FRAME_TIMEOUT,
     ) -> None:
         self._session = session
         self._get_port = get_port
         self._url_for = stream_url_for_port
         self._max_duration = max_duration
         self._snapshot_cache = snapshot_cache
+        # Сертификат видеопрокси не покрывает имя stream.amvideo-msk.ru,
+        # приложение его не проверяет — по умолчанию тоже не проверяем.
+        self._ssl = ssl_verify if ssl_verify else False
+        self._first_frame_timeout = first_frame_timeout
 
         self._last_frame: bytes | None = None
         self._last_frame_ts = 0.0
@@ -133,7 +171,7 @@ class BarrierStream:
         if not ffmpeg_available():
             raise RuntimeError("ffmpeg не найден в системе — видео недоступно")
 
-        async with self._session.ws_connect(url) as ws:
+        async with self._session.ws_connect(url, ssl=self._ssl) as ws:
             proc = await asyncio.create_subprocess_exec(
                 *FFMPEG_ARGS,
                 stdin=asyncio.subprocess.PIPE,
@@ -143,7 +181,9 @@ class BarrierStream:
             assert proc.stdin is not None and proc.stdout is not None
             pump = asyncio.create_task(_pump_ws_to_stdin(ws, proc.stdin))
             try:
-                async for frame in _read_frames(proc.stdout, deadline):
+                async for frame in _read_frames(
+                    proc.stdout, deadline, self._first_frame_timeout
+                ):
                     self._last_frame = frame
                     self._last_frame_ts = time.monotonic()
                     yield frame
@@ -185,8 +225,17 @@ class BarrierStream:
                     type(err).__name__,
                     err,
                 )
-            except RuntimeError as err:
-                _LOGGER.error("%s", err)
+            except AmVideoError as err:
+                # сервер не выдал порт / «нет доступа» / нет связи при
+                # запросе type=video — раньше это умирало на DEBUG и окно
+                # камеры пустело без единой записи в журнале
+                warn_limited(
+                    _LOGGER,
+                    f"frames_api_{id(self)}",
+                    "Видеопоток остановлен: %s (повтор — при следующем "
+                    "открытии видео)",
+                    err,
+                )
                 return
             await asyncio.sleep(2)
         if attempts >= max_attempts:
