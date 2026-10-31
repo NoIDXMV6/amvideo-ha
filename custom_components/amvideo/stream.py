@@ -17,10 +17,9 @@ from typing import AsyncIterator, Awaitable, Callable
 import aiohttp
 
 from .const import DEFAULT_SNAPSHOT_CACHE
+from .diag import warn_limited
 
 _LOGGER = logging.getLogger(__name__)
-
-FFMPEG_BINARY = shutil.which("ffmpeg")
 
 # stdin: MPEG-TS от сервера; stdout: MJPEG-кадры
 FFMPEG_ARGS = (
@@ -48,8 +47,8 @@ _EOI = b"\xff\xd9"
 
 
 def ffmpeg_available() -> bool:
-    """Есть ли ffmpeg в системе."""
-    return FFMPEG_BINARY is not None
+    """Есть ли ffmpeg в системе (проверяется на каждый вызов)."""
+    return shutil.which("ffmpeg") is not None
 
 
 async def _pump_ws_to_stdin(ws: aiohttp.ClientWebSocketResponse, stdin: asyncio.StreamWriter) -> None:
@@ -179,11 +178,26 @@ class BarrierStream:
                         attempts = 0
                     yield frame
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as err:
-                _LOGGER.debug("Видеопоток прерван (%s), переподключение", err)
+                warn_limited(
+                    _LOGGER,
+                    f"frames_err_{id(self)}",
+                    "Видеопоток прерван (%s: %s), переподключение…",
+                    type(err).__name__,
+                    err,
+                )
             except RuntimeError as err:
                 _LOGGER.error("%s", err)
                 return
             await asyncio.sleep(2)
+        if attempts >= max_attempts:
+            warn_limited(
+                _LOGGER,
+                f"frames_giveup_{id(self)}",
+                "Видеопоток остановлен после %d неудачных подключений подряд "
+                "(сервер не выдал порт или отклонил соединение; повтор — при "
+                "следующем открытии видео)",
+                max_attempts,
+            )
 
     async def snapshot(self, timeout: float = 12.0) -> bytes | None:
         """Один кадр (для снимка камеры). Кэшируется на snapshot_cache сек."""
@@ -196,5 +210,12 @@ class BarrierStream:
                 ):
                     return frame
         except (TimeoutError, aiohttp.ClientError, OSError, RuntimeError) as err:
-            _LOGGER.debug("Снимок не получен: %s", err)
+            warn_limited(
+                _LOGGER,
+                f"snapshot_err_{id(self)}",
+                "Снимок камеры не получен: %s: %s (если так повторяется — "
+                "видео у сервера недоступно для этого аккаунта/КПУ)",
+                type(err).__name__,
+                err,
+            )
         return None

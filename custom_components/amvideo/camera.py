@@ -33,6 +33,7 @@ from .const import (
 )
 from .coordinator import AmVideoCoordinator
 from .stream import BarrierStream, ffmpeg_available
+from .diag import warn_limited
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -115,16 +116,36 @@ class AmVideoCamera(Camera):
     ) -> bytes | None:
         """Одиночный кадр (снимок)."""
         if not ffmpeg_available():
+            warn_limited(
+                _LOGGER,
+                "no_ffmpeg",
+                "Камера %s: ffmpeg не найден в системе — кадры недоступны. "
+                "Установите ffmpeg (в HA OS/Container он есть по умолчанию).",
+                self._panel.get("adress"),
+            )
             return None
         try:
             return await self._stream.snapshot()
         except Exception as err:  # noqa: BLE001
-            _LOGGER.debug("Снимок %s не удался: %s", self._panel.get("adress"), err)
+            warn_limited(
+                _LOGGER,
+                f"snapshot_{self._id_shlag}",
+                "Снимок %s не удался: %s: %s",
+                self._panel.get("adress"),
+                type(err).__name__,
+                err,
+            )
             return None
 
     async def handle_async_mjpeg_stream(self, request: web.Request) -> web.StreamResponse | None:
         """Живой MJPEG-поток из MPEG1-канала."""
         if not ffmpeg_available():
+            warn_limited(
+                _LOGGER,
+                "no_ffmpeg",
+                "Камера %s: ffmpeg не найден в системе — видео недоступно.",
+                self._panel.get("adress"),
+            )
             return None
         response = web.StreamResponse()
         response.content_type = (
