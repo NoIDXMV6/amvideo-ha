@@ -34,7 +34,8 @@
     "abort": {
       "already_configured": "This account is already configured",
       "reauth_successful": "Login refreshed",
-      "reauth_started": "Opening re-authentication — fill in the login form"
+      "reauth_started": "Opening re-authentication — fill in the login form",
+      "already_in_progress": "Setup of this account is already in progress in another window. Finish it or restart Home Assistant — v1.0.4 clears stuck flows automatically."
     }
   },
   "options": {

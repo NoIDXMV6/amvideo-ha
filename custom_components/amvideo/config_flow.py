@@ -150,6 +150,33 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
         return False, str(result.get("str") or "Сервер не выслал PIN")
 
     # ------------------------------------------------------------------ #
+    # Зависшие попытки настройки
+    # ------------------------------------------------------------------ #
+    @callback
+    def _async_abort_stale_flows(self, unique_id: str) -> None:
+        """Прервать зависшие потоки настройки с тем же аккаунтом.
+
+        Незавершённый flow (закрыли окно с PIN, код не пришёл, HA
+        перезапускали) остаётся «в работе» и переживает рестарты Home
+        Assistant. Пока он жив, каждая новая попытка добавления
+        обрывалась с already_in_progress. Старые потоки безвредны для
+        сервера — они не держат сессию, так что спокойно их закрываем.
+        """
+        flow_mgr = self.hass.config_entries.flow
+        for progress in flow_mgr.async_progress_by_handler(DOMAIN):
+            if isinstance(progress, dict):
+                flow_id = progress.get("flow_id")
+                ctx = progress.get("context") or {}
+            else:  # на случай, если в будущих HA flow станет объектом
+                flow_id = getattr(progress, "flow_id", None)
+                ctx = getattr(progress, "context", None) or {}
+            if not flow_id or flow_id == getattr(self, "flow_id", None):
+                continue
+            if ctx.get("unique_id") == unique_id:
+                _LOGGER.debug("Прерываю зависший flow настройки %s", flow_id)
+                flow_mgr.async_abort(flow_id)
+
+    # ------------------------------------------------------------------ #
     # Шаг 1: телефон + пароль
     # ------------------------------------------------------------------ #
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -164,7 +191,11 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         if user_input is not None:
             login = "".join(ch for ch in str(user_input[CONF_USERNAME]) if ch.isdigit())
-            await self.async_set_unique_id(login)
+            # Сначала убираем зависшие попытки настройки этого же аккаунта,
+            # затем привязываем flow: иначе async_set_unique_id обрывает
+            # поток с already_in_progress.
+            self._async_abort_stale_flows(login)
+            await self.async_set_unique_id(login, raise_on_progress=False)
             self._abort_if_unique_id_configured()
             self.data = dict(user_input)
             self.data[CONF_USERNAME] = login
@@ -196,6 +227,8 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 # device_key сервер запомнил — вход без PIN; PIN не сохраняем
                 self.data[CONF_PIN] = ""
+                # аккаунт могли настроить из другого окна, пока шла настройка
+                self._abort_if_unique_id_configured()
                 return self.async_create_entry(title="А.М.Видео", data=self.data)
         return self.async_show_form(
             step_id="user",
@@ -252,6 +285,8 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                         )
                         await self.hass.config_entries.async_reload(entry.entry_id)
                         return self.async_abort(reason="reauth_successful")
+                    # аккаунт могли настроить из другого окна, пока ждали SMS
+                    self._abort_if_unique_id_configured()
                     return self.async_create_entry(title="А.М.Видео", data=self.data)
         self.data["pin_status"] = status
         return self.async_show_form(
