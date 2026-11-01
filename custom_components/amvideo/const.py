@@ -48,3 +48,8 @@ OPENING_TIME = "opening_time"
 OPEN_DURATION = "open_duration"
 COOLDOWN = "cooldown"
 STREAM_DURATION = "stream_duration"
+
+# Локальный рестрим для NVR (Frigate и др.) — см. restream.py
+CONF_RESTREAM_ENABLED = "restream_enabled"
+DEFAULT_RESTREAM_ENABLED = False
+CONF_RESTREAM_TOKEN = "restream_token"

@@ -24,8 +24,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .brand import brand_icon_url
 from .const import (
     CONF_STREAM_SSL_VERIFY,
+    CONF_RESTREAM_ENABLED,
     DEFAULT_FIRST_FRAME_TIMEOUT,
     DEFAULT_STREAM_DURATION,
     DEFAULT_STREAM_SSL_VERIFY,
@@ -35,6 +37,11 @@ from .const import (
     STREAM_DURATION,
 )
 from .coordinator import AmVideoCoordinator
+from .restream import (
+    frigate_input_url,
+    register_restream,
+    unregister_restream_entity,
+)
 from .stream import BarrierStream, ffmpeg_available
 from .diag import warn_limited
 
@@ -76,6 +83,7 @@ class AmVideoCamera(Camera):
     ) -> None:
         Camera.__init__(self)
         self._coordinator = coordinator
+        self._entry_id = entry_id
         self._panel = panel
         id_shlag = str(panel["id_shlag"])
         self._id_shlag = id_shlag
@@ -104,13 +112,18 @@ class AmVideoCamera(Camera):
         )
 
     @property
+    def entity_picture(self) -> str | None:
+        """Иконка интеграции (приложение А.М.Видео + логотип HA)."""
+        return brand_icon_url()
+
+    @property
     def available(self) -> bool:
         return self._coordinator.last_update_success
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         target = self._stream.last_target or ""
-        return {
+        attrs = {
             "id_shlag": self._panel.get("id_shlag"),
             "adress": self._panel.get("adress"),
             "stream_type": "MPEG1-TS over WebSocket (jsmpeg)",
@@ -123,6 +136,12 @@ class AmVideoCamera(Camera):
             "frames_seen": self._stream.frames_seen,
             "last_error": self._stream.last_error,
         }
+        # Готовый вход для config.yml Frigate (если рестрим включён в опциях)
+        if self._coordinator.entry.options.get(CONF_RESTREAM_ENABLED, False):
+            attrs["frigate_input"] = frigate_input_url(
+                self._coordinator.entry, self._id_shlag
+            )
+        return attrs
 
     @property
     def frame_interval(self) -> float:
@@ -202,5 +221,10 @@ class AmVideoCamera(Camera):
                 pass
         return response
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self._coordinator.entry.options.get(CONF_RESTREAM_ENABLED, False):
+            register_restream(self.hass, self._entry_id, self._id_shlag, self)
+
     async def async_will_remove_from_hass(self) -> None:
-        """Очистки не требуются: конвейер собирается на лету."""
+        unregister_restream_entity(self.hass, self._entry_id, self._id_shlag)

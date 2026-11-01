@@ -39,6 +39,7 @@ from .const import (
     CONF_DEVICE_KEY,
     CONF_PIN,
     CONF_RESERVE_URL,
+    CONF_RESTREAM_ENABLED,
     CONF_SID,
     COOLDOWN,
     DOMAIN,
@@ -50,6 +51,7 @@ from .const import (
     DEFAULT_OPEN_DURATION,
     DEFAULT_OPENING_TIME,
     DEFAULT_POLL_INTERVAL,
+    DEFAULT_RESTREAM_ENABLED,
     DEFAULT_STREAM_DURATION,
 )
 
@@ -92,6 +94,9 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Required(STREAM_DURATION, default=DEFAULT_STREAM_DURATION): vol.All(
             vol.Coerce(int), vol.Range(min=60, max=3600)
         ),
+        vol.Required(
+            CONF_RESTREAM_ENABLED, default=DEFAULT_RESTREAM_ENABLED
+        ): bool,
     }
 )
 
@@ -373,6 +378,9 @@ class AmVideoOptionsFlow(OptionsFlow):
             OPEN_DURATION: options.get(OPEN_DURATION, DEFAULT_OPEN_DURATION),
             COOLDOWN: options.get(COOLDOWN, DEFAULT_COOLDOWN),
             STREAM_DURATION: options.get(STREAM_DURATION, DEFAULT_STREAM_DURATION),
+            CONF_RESTREAM_ENABLED: options.get(
+                CONF_RESTREAM_ENABLED, DEFAULT_RESTREAM_ENABLED
+            ),
         }
         return self.async_show_form(
             step_id="options",

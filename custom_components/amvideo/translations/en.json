@@ -54,7 +54,11 @@
           "opening_time": "«Opening» time after the command, sec",
           "open_duration": "Seconds the barrier counts as «open», sec",
           "cooldown": "Pause between open commands, sec",
-          "stream_duration": "Max live video duration, sec"
+          "stream_duration": "Max live video duration, sec",
+          "restream_enabled": "Local video restream for NVR (Frigate)"
+        },
+        "data_description": {
+          "restream_enabled": "Serves the camera live video at http://homeassistant:8123/api/amvideo/restream/… (token protected) for Frigate detection. The ready-to-use address appears in the camera attributes (frigate_input)."
         }
       }
     }
