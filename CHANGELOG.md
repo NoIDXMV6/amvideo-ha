@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.10
+
+- **`http` добавлен в `dependencies` манифеста** — правка по ревью HACS
+  (hassfest: «Using component http but it's not in 'dependencies' or
+  'after_dependencies'»). Интеграция «А.М.Видео» регистрирует HTTP-view
+  (`hass.http.register_view`: локальный рестрим MJPEG для Frigate/NVR и
+  бренд-иконка), поэтому компонент `http` обязан быть настроен до загрузки
+  интеграции. Поведение не меняется; релиз — для пере-проверки заявки HACS.
+
 ## 1.0.9
 
 - **Оригинальная иконка приложения А.М.Видео с логотипом Home Assistant
