@@ -48,25 +48,32 @@
         }
       },
       "options": {
-        "title": "Polling and timing options",
+        "title": "Параметры опроса и таймингов",
+        "description": "Вход Frigate (config.yml → ffmpeg → inputs → path): `{frigate_url}`. Адрес и токен показываются только на этом экране (доступен администраторам) — в атрибутах камеры и журнале их нет.",
         "data": {
-          "scan_interval": "Server poll interval, sec",
-          "opening_time": "«Opening» time after the command, sec",
-          "open_duration": "Seconds the barrier counts as «open», sec",
-          "cooldown": "Pause between open commands, sec",
-          "stream_duration": "Max live video duration, sec",
-          "restream_enabled": "Local video restream for NVR (Frigate)"
+          "scan_interval": "Интервал опроса сервера, сек",
+          "opening_time": "Время «открывается» после команды, сек",
+          "open_duration": "Сколько секунд считается «открыто», сек",
+          "cooldown": "Пауза между командами открытия, сек",
+          "stream_duration": "Максимальная длительность живого видео, сек",
+          "restream_enabled": "Локальный рестрим видео для NVR (Frigate)",
+          "restream_regenerate_token": "Перевыпустить токен рестрима"
         },
         "data_description": {
-          "restream_enabled": "Serves the camera live video at http://homeassistant:8123/api/amvideo/restream/… (token protected) for Frigate detection. The ready-to-use address appears in the camera attributes (frigate_input)."
+          "restream_enabled": "Раздаёт живое видео камеры по локальному адресу http://homeassistant:8123/api/amvideo/restream/… (защищено случайным токеном) для детекции машин во Frigate. Готовый вход показывается в описании сверху после сохранения; идентификатор шлагбаума — в атрибуте barrier_id сущности.",
+          "restream_regenerate_token": "Сгенерировать новый токен вместо текущего (в опции не сохраняется). Прежние ссылки Frigate перестанут работать — обновите config.yml. Тот же эффект даёт сервис amvideo.regenerate_restream_token."
         }
       }
     }
   },
   "services": {
     "open_barrier": {
-      "name": "Open the barrier",
-      "description": "Sends the open command to the А.М.Видео server"
+      "name": "Открыть шлагбаум",
+      "description": "Отправляет серверу А.М.Видео команду открытия КПУ"
+    },
+    "regenerate_restream_token": {
+      "name": "Перевыпустить токен рестрима",
+      "description": "Генерирует новый случайный токен для локального рестрима видео (вход Frigate). После перевыпуска прежние ссылки перестают работать — новый вход показывается в опциях интеграции. Токен нигде не публикуется (ни в атрибутах, ни в журнале)."
     }
   }
 }

@@ -53,3 +53,6 @@ STREAM_DURATION = "stream_duration"
 CONF_RESTREAM_ENABLED = "restream_enabled"
 DEFAULT_RESTREAM_ENABLED = False
 CONF_RESTREAM_TOKEN = "restream_token"
+# Одноразовый чекбокс в options flow: перевыпустить токен рестрима
+# (в сохранённые опции не попадает, обрабатывается в config_flow)
+CONF_RESTREAM_REGENERATE = "restream_regenerate_token"

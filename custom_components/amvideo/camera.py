@@ -38,7 +38,6 @@ from .const import (
 )
 from .coordinator import AmVideoCoordinator
 from .restream import (
-    frigate_input_url,
     register_restream,
     unregister_restream_entity,
 )
@@ -136,11 +135,10 @@ class AmVideoCamera(Camera):
             "frames_seen": self._stream.frames_seen,
             "last_error": self._stream.last_error,
         }
-        # Готовый вход для config.yml Frigate (если рестрим включён в опциях)
-        if self._coordinator.entry.options.get(CONF_RESTREAM_ENABLED, False):
-            attrs["frigate_input"] = frigate_input_url(
-                self._coordinator.entry, self._id_shlag
-            )
+        # Токен рестрима в атрибутах НЕ публикуется (виден всем
+        # пользователям HA и попадает в recorder/шаблоны) — готовый
+        # вход Frigate показывается только в options flow интеграции
+        # (экран доступен только администраторам).
         return attrs
 
     @property
