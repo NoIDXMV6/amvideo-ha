@@ -18,13 +18,19 @@ import asyncio
 import logging
 import shutil
 import time
-from typing import AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
+from urllib.parse import urlparse
 
 import aiohttp
 
 from .api import AmVideoError
 from .const import DEFAULT_FIRST_FRAME_TIMEOUT, DEFAULT_SNAPSHOT_CACHE
 from .diag import warn_limited
+
+if TYPE_CHECKING:
+    # только для подсказок типов: модуль остаётся независимым от HA
+    # в рантайме (hass используется утиной типизацией)
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,9 +59,45 @@ _SOI = b"\xff\xd8\xff"
 _EOI = b"\xff\xd9"
 
 
-def ffmpeg_available() -> bool:
-    """Есть ли ffmpeg в системе (проверяется на каждый вызов)."""
+# Кэш системной проверки ffmpeg. shutil.which() статирует каждый каталог
+# PATH — это блокирующий файловый I/O, который нельзя выполнять в
+# event loop (ревью HACS). Проверка выполняется ОДИН РАЗ в executor-е
+# при настройке интеграции (ensure_ffmpeg_available), остальные места
+# читают готовый результат через ffmpeg_available().
+_FFMPEG_RESOLVED: bool | None = None
+
+
+def _find_ffmpeg() -> bool:
+    """Блокирующая проверка наличия ffmpeg (выполняется в executor-е)."""
     return shutil.which("ffmpeg") is not None
+
+
+async def ensure_ffmpeg_available(hass: "HomeAssistant") -> bool:
+    """Проверить ffmpeg один раз в executor-е и закэшировать результат.
+
+    Вызывается при настройке интеграции (async_setup_entry); hass
+    используется только как источник executor-а (async_add_executor_job).
+    """
+    global _FFMPEG_RESOLVED
+    if _FFMPEG_RESOLVED is None:
+        _FFMPEG_RESOLVED = await hass.async_add_executor_job(_find_ffmpeg)
+    return _FFMPEG_RESOLVED
+
+
+def ffmpeg_available() -> bool:
+    """ffmpeg доступен (неблокирующее чтение кэша).
+
+    Кэш заполняется при настройке интеграции через
+    ensure_ffmpeg_available() — до первого вызова этой функции
+    проверка считается отрицательной без блокирующего I/O.
+    """
+    return _FFMPEG_RESOLVED is True
+
+
+def reset_ffmpeg_cache() -> None:
+    """Сбросить кэш проверки ffmpeg (для тестов и reload-сценариев)."""
+    global _FFMPEG_RESOLVED
+    _FFMPEG_RESOLVED = None
 
 
 async def _pump_ws_to_stdin(ws: aiohttp.ClientWebSocketResponse, stdin: asyncio.StreamWriter) -> None:
@@ -171,7 +213,14 @@ class BarrierStream:
         target = await self._get_target()
         self.last_target = str(target)
         url = self._url_for(target)
-        _LOGGER.debug("Подключение к видеопрокси: %s", url)
+        # Токен сессии — в пути WSS-URL, поэтому в журнал идёт только
+        # хост и порт (ревью HACS: URL целиком в DEBUG не логировать)
+        parsed = urlparse(url)
+        _LOGGER.debug(
+            "Подключение к видеопрокси: %s:%s",
+            parsed.hostname,
+            parsed.port,
+        )
 
         if not ffmpeg_available():
             raise RuntimeError("ffmpeg не найден в системе — видео недоступно")
@@ -224,7 +273,10 @@ class BarrierStream:
                         attempts = 0
                     yield frame
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as err:
-                self.last_error = f"{type(err).__name__}: {err}"
+                # в атрибуты камеры попадает только ТИП исключения: текст
+                # handshake-ошибок может содержать WSS-URL с токеном сессии
+                # (ревью HACS); подробности — только в журнале для админов
+                self.last_error = type(err).__name__
                 warn_limited(
                     _LOGGER,
                     f"frames_err_{id(self)}",
@@ -233,7 +285,9 @@ class BarrierStream:
                     err,
                 )
             except AmVideoError as err:
-                self.last_error = str(err)
+                # серверные сообщения не содержат URL/токена, но для
+                # единообразия в атрибуты тоже идёт только тип исключения
+                self.last_error = type(err).__name__
                 # сервер не выдал цель / «нет доступа» / нет связи при
                 # запросе type=video — раньше это умирало на DEBUG и окно
                 # камеры пустело без единой записи в журнале
@@ -269,7 +323,8 @@ class BarrierStream:
         except (
             TimeoutError, aiohttp.ClientError, OSError, RuntimeError, AmVideoError
         ) as err:
-            self.last_error = f"{type(err).__name__}: {err}"
+            # только тип исключения (см. frames) — токен не попадает в атрибуты
+            self.last_error = type(err).__name__
             warn_limited(
                 _LOGGER,
                 f"snapshot_err_{id(self)}",

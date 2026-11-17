@@ -41,7 +41,7 @@ from .restream import (
     register_restream,
     unregister_restream_entity,
 )
-from .stream import BarrierStream, ffmpeg_available
+from .stream import BarrierStream, ensure_ffmpeg_available, ffmpeg_available
 from .diag import warn_limited
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +56,10 @@ async def async_setup_entry(
 ) -> None:
     """Создать камеры для КПУ, у которых есть камера."""
     coordinator: AmVideoCoordinator = entry.runtime_data
-    if not ffmpeg_available():
+    # shutil.which() статирует каждый каталог PATH — блокирующий I/O,
+    # поэтому проверка выполняется ОДИН РАЗ в executor-е и кэшируется;
+    # остальные места читают кэш через ffmpeg_available() (ревью HACS)
+    if not await ensure_ffmpeg_available(hass):
         _LOGGER.error(
             "ffmpeg не найден в системе — камеры А.М.Видео будут недоступны. "
             "Установите ffmpeg (в HA OS/Container он есть по умолчанию)."
