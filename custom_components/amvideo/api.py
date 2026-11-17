@@ -98,7 +98,16 @@ class AmVideoClient:
             ) as resp:
                 if resp.status != 200:
                     raise AmVideoError(f"HTTP {resp.status} от {url}")
-                return await resp.json(content_type=None)
+                try:
+                    return await resp.json(content_type=None)
+                except ValueError as err:
+                    # сервер вернул 200 без JSON (HTML-страница шлюза,
+                    # пустое тело и т.п.) — превращаем в AmVideoError,
+                    # иначе исключение уходит наружу и роняет config/reauth
+                    # flow с «Неизвестная ошибка»
+                    raise AmVideoError(
+                        f"Сервер вернул не JSON-ответ: {err}"
+                    ) from err
         except (ClientError, asyncio.TimeoutError, OSError) as err:
             raise AmVideoError(f"Нет связи с {url}: {err}") from err
 

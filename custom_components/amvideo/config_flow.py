@@ -291,7 +291,7 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                         self.hass.config_entries.async_update_entry(
                             entry, data=self.data
                         )
-                        await self.hass.config_entries.async_reload(entry.entry_id)
+                        # перезагрузку выполняет update listener (см. выше)
                         return self.async_abort(reason="reauth_successful")
                     # аккаунт могли настроить из другого окна, пока ждали SMS
                     self._abort_if_unique_id_configured()
@@ -348,7 +348,9 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
                 entry = self._reauth_entry
                 self.data[CONF_PIN] = ""
                 self.hass.config_entries.async_update_entry(entry, data=self.data)
-                await self.hass.config_entries.async_reload(entry.entry_id)
+                # перезагрузку выполняет update listener (один reload);
+                # явный reload здесь давал ДВОЙНОЙ перезапуск платформ,
+                # из-за которого могли отваливаться камеры после reauth
                 return self.async_abort(reason="reauth_successful")
         return self.async_show_form(
             step_id="reauth_confirm",
