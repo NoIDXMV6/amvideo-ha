@@ -21,6 +21,7 @@
         "title": "А.М.Видео — re-authentication",
         "description": "{status}",
         "data": {
+          "username": "Account phone (7XXXXXXXXXX) — editable",
           "password": "Password"
         }
       }

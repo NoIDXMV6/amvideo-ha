@@ -4,10 +4,12 @@
 1) пользователь вводит телефон и пароль;
 2) интеграция пытается войти (type=login без PIN); сервер отвечает
    change_device=true — вход с нового устройства требует 4-значный PIN;
-3) интеграция САМА высылает PIN по SMS (type=pin, pin_type=device,
-   sms=0 — ровно как первое нажатие кнопки «Запросить ПИН» в приложении);
+3) интеграция САМА запрашивает PIN: type=pin, pin_type=device, sms=1 —
+   СТРОГО по SMS. Параметр sms — способ доставки, а не счётчик повторов:
+   sms=0 шлёт пуш-уведомление в приложение (в HA его не видно — код
+   «не приходил»), sms=1 — SMS-сообщение (проверено на живом сервере);
 4) пользователь вводит код из SMS — вход повторяется с PIN
-   (код действует ~3 минуты, повторная высылка — sms=1).
+   (код действует ~3 минуты, повторная высылка — снова sms=1).
 
 device_key генерируется автоматически и сохраняется в записи: после
 первого успешного входа сервер запоминает устройство, и повторные
@@ -75,6 +77,7 @@ STEP_PIN_SCHEMA = vol.Schema(
 
 STEP_REAUTH_SCHEMA = vol.Schema(
     {
+        vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
     }
 )
@@ -125,6 +128,21 @@ async def validate_login(hass, data: dict[str, Any]) -> AmVideoClient:
     return client
 
 
+def _normalize_phone(phone: str) -> str:
+    """Привести телефон к виду 7XXXXXXXXXX (как в приложении и в ЕГДС).
+
+    Пользователь может ввести +7…, 8…, 10 цифр без кода страны —
+    сервер А.М.Видео понимает только 11 цифр с ведущей 7. Без
+    нормализации «8 985 …» превращался бы в другой аккаунт.
+    """
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if len(digits) == 10 and digits[0] != "7":
+        digits = "7" + digits
+    if len(digits) == 11 and digits[0] == "8":
+        digits = "7" + digits[1:]
+    return digits
+
+
 class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Обработка config flow."""
 
@@ -137,8 +155,15 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------ #
     # Высылка PIN по SMS (type=pin, как кнопка «Запросить ПИН»)
     # ------------------------------------------------------------------ #
-    async def _send_pin(self, sms: str) -> tuple[bool, str]:
-        """Запросить PIN. Возвращает (успех, текст для пользователя)."""
+    async def _send_pin(self, sms: str = "1") -> tuple[bool, str]:
+        """Запросить PIN. Возвращает (успех, текст для пользователя).
+
+        ВАЖНО: параметр sms — это СПОСОБ ДОСТАВКИ, а не счётчик повторов
+        (проверено на живом сервере 2026): sms=0 — пуш-уведомление в
+        приложение А.М.Видео, sms=1 — SMS-сообщение. Интеграция всегда
+        просит SMS: пользователь в HA не видит пуши мобильного
+        приложения, и при sms=0 код не приходил вовсе.
+        """
         client = AmVideoClient(
             async_get_clientsession(self.hass),
             login=self.data[CONF_USERNAME],
@@ -198,7 +223,7 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
             "попросит войти заново — это нормально, дальше они работают параллельно."
         )
         if user_input is not None:
-            login = "".join(ch for ch in str(user_input[CONF_USERNAME]) if ch.isdigit())
+            login = _normalize_phone(user_input[CONF_USERNAME])
             # Сначала убираем зависшие попытки настройки этого же аккаунта,
             # затем привязываем flow: иначе async_set_unique_id обрывает
             # поток с already_in_progress.
@@ -212,8 +237,9 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 await validate_login(self.hass, self.data)
             except AmVideoPinRequired:
-                # Новый код доставляется как в приложении — по SMS
-                ok, status = await self._send_pin(sms="0")
+                # Код доставляется по SMS (sms=1 — SMS, sms=0 — пуш в
+                # приложение, который в HA не виден)
+                ok, status = await self._send_pin(sms="1")
                 if ok:
                     status = (
                         f"{status} Введите код из SMS (действует ~3 минуты) "
@@ -251,9 +277,9 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_pin(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ввод PIN, высланного по SMS.
 
-        Галочка «Выслать новый PIN» повторяет запрос (sms=1, как повторное
-        нажатие кнопки в приложении) и НЕ выполняет вход — новый PIN
-        перезаписывает предыдущий.
+        Галочка «Выслать новый PIN» повторяет запрос (снова sms=1 —
+        доставка SMS) и НЕ выполняет вход — новый PIN перезаписывает
+        предыдущий.
         """
         errors: dict[str, str] = {}
         status = str(
@@ -313,22 +339,37 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Обновить вход: телефон (можно изменить) + пароль.
+
+        Телефон показывается и редактируется: если номер сменился,
+        вход выполняется уже под новым аккаунтом, а после успеха
+        unique_id записи тоже обновляется.
+        """
         errors: dict[str, str] = {}
+        entry_phone = str(self.data.get(CONF_USERNAME, ""))
         status = (
             "Сессия недействительна (срок истёк либо её перехватил свежий "
-            "вход — например, вход в приложение на телефоне). Введите "
-            "актуальный пароль для нового входа. Если сервер потребует "
-            "PIN, интеграция сама вышлет код по SMS. "
+            "вход — например, вход в приложение на телефоне). Проверьте "
+            "телефон (можно изменить) и введите актуальный пароль. Если "
+            "сервер потребует PIN, интеграция вышлет код ПО SMS. "
             "Внимание: после этого входа приложение на телефоне попросит "
             "авторизоваться заново — это ограничение сервера А.М.Видео."
         )
         if user_input is not None:
+            login = _normalize_phone(user_input[CONF_USERNAME])
+            if login != entry_phone:
+                # Номер сменился: проверяем, что такой аккаунт ещё не
+                # настроен, и продолжаем под новым номером
+                self._async_abort_stale_flows(login)
+                await self.async_set_unique_id(login, raise_on_progress=False)
+                self._abort_if_unique_id_configured()
+            self.data[CONF_USERNAME] = login
             self.data[CONF_PASSWORD] = user_input[CONF_PASSWORD]
             self.data[CONF_PIN] = ""
             try:
                 await validate_login(self.hass, self.data)
             except AmVideoPinRequired:
-                ok, status = await self._send_pin(sms="0")
+                ok, status = await self._send_pin(sms="1")
                 if ok:
                     status = (
                         f"{status} Введите код из SMS (действует ~3 минуты) "
@@ -347,14 +388,21 @@ class AmVideoConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 entry = self._reauth_entry
                 self.data[CONF_PIN] = ""
-                self.hass.config_entries.async_update_entry(entry, data=self.data)
+                phone_changed = login != entry_phone
+                self.hass.config_entries.async_update_entry(
+                    entry,
+                    data=self.data,
+                    unique_id=login if phone_changed else entry.unique_id,
+                )
                 # перезагрузку выполняет update listener (один reload);
                 # явный reload здесь давал ДВОЙНОЙ перезапуск платформ,
                 # из-за которого могли отваливаться камеры после reauth
                 return self.async_abort(reason="reauth_successful")
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=STEP_REAUTH_SCHEMA,
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_REAUTH_SCHEMA, {CONF_USERNAME: entry_phone}
+            ),
             errors=errors or None,
             description_placeholders={"status": status},
         )

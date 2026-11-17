@@ -21,6 +21,7 @@
         "title": "А.М.Видео — обновить вход",
         "description": "{status}",
         "data": {
+          "username": "Телефон аккаунта (7XXXXXXXXXX) — можно изменить",
           "password": "Пароль"
         }
       }
