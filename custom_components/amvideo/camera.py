@@ -42,7 +42,7 @@ from .restream import (
     unregister_restream_entity,
 )
 from .stream import BarrierStream, ensure_ffmpeg_available, ffmpeg_available
-from .diag import warn_limited
+from .diag import safe_exc_text, warn_limited
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,13 +166,14 @@ class AmVideoCamera(Camera):
         try:
             return await self._stream.snapshot()
         except Exception as err:  # noqa: BLE001
+            # только тип (+ HTTP-статус) — текст исключений aiohttp
+            # содержит WSS-URL с токеном сессии (ревью HACS)
             warn_limited(
                 _LOGGER,
                 f"snapshot_{self._id_shlag}",
-                "Снимок %s не удался: %s: %s",
+                "Снимок %s не удался: %s",
                 self._panel.get("adress"),
-                type(err).__name__,
-                err,
+                safe_exc_text(err),
             )
             return None
 
@@ -206,14 +207,14 @@ class AmVideoCamera(Camera):
             _LOGGER.debug("Клиент отключился от потока %s", self.entity_id)
         except Exception as err:  # noqa: BLE001
             # причина пустого окна должна быть видна в журнале, а не
-            # только при включённом debug-режиме
+            # только при включённом debug-режиме; текст исключения не
+            # логируем — он может содержать WSS-URL с токеном (ревью HACS)
             warn_limited(
                 _LOGGER,
                 f"mjpeg_{self._id_shlag}",
-                "Поток камеры %s остановлен: %s: %s",
+                "Поток камеры %s остановлен: %s",
                 self._panel.get("adress"),
-                type(err).__name__,
-                err,
+                safe_exc_text(err),
             )
         finally:
             try:

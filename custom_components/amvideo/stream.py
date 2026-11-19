@@ -25,7 +25,7 @@ import aiohttp
 
 from .api import AmVideoError
 from .const import DEFAULT_FIRST_FRAME_TIMEOUT, DEFAULT_SNAPSHOT_CACHE
-from .diag import warn_limited
+from .diag import safe_exc_text, warn_limited
 
 if TYPE_CHECKING:
     # только для подсказок типов: модуль остаётся независимым от HA
@@ -273,16 +273,15 @@ class BarrierStream:
                         attempts = 0
                     yield frame
             except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as err:
-                # в атрибуты камеры попадает только ТИП исключения: текст
-                # handshake-ошибок может содержать WSS-URL с токеном сессии
-                # (ревью HACS); подробности — только в журнале для админов
+                # в атрибуты камеры и журнал попадает только ТИП исключения
+                # (+ HTTP-статус): текст handshake-ошибок aiohttp содержит
+                # полный WSS-URL, а в его пути — токен сессии (ревью HACS)
                 self.last_error = type(err).__name__
                 warn_limited(
                     _LOGGER,
                     f"frames_err_{id(self)}",
-                    "Видеопоток прерван (%s: %s), переподключение…",
-                    type(err).__name__,
-                    err,
+                    "Видеопоток прерван (%s), переподключение…",
+                    safe_exc_text(err),
                 )
             except AmVideoError as err:
                 # серверные сообщения не содержат URL/токена, но для
@@ -323,14 +322,14 @@ class BarrierStream:
         except (
             TimeoutError, aiohttp.ClientError, OSError, RuntimeError, AmVideoError
         ) as err:
-            # только тип исключения (см. frames) — токен не попадает в атрибуты
+            # только тип исключения (+ HTTP-статус, см. frames) — токен
+            # не попадает в журнал и атрибуты
             self.last_error = type(err).__name__
             warn_limited(
                 _LOGGER,
                 f"snapshot_err_{id(self)}",
-                "Снимок камеры не получен: %s: %s (если так повторяется — "
+                "Снимок камеры не получен: %s (если так повторяется — "
                 "видео у сервера недоступно для этого аккаунта/КПУ)",
-                type(err).__name__,
-                err,
+                safe_exc_text(err),
             )
         return None

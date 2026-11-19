@@ -16,6 +16,21 @@ _LAST_WARN: dict[str, float] = {}
 WARN_INTERVAL = 300.0
 
 
+def safe_exc_text(err: BaseException) -> str:
+    """Безопасное описание исключения для журнала: тип и HTTP-статус.
+
+    Строковое представление исключений aiohttp (WSServerHandshakeError,
+    ClientResponseError) содержит полный URL запроса, а в пути WSS-URL
+    находится токен видеосессии — поэтому в журнал идёт только тип
+    исключения и, если он есть, код HTTP-статуса (ревью HACS).
+    """
+    name = type(err).__name__
+    status = getattr(err, "status", None)
+    if isinstance(status, int) and status > 0:
+        return f"{name} (HTTP {status})"
+    return name
+
+
 def warn_limited(
     logger: logging.Logger,
     key: str,
