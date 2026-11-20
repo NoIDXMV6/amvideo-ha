@@ -18,6 +18,7 @@ import asyncio
 import logging
 import shutil
 import time
+import uuid
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse
 
@@ -200,6 +201,11 @@ class BarrierStream:
 
         self._last_frame: bytes | None = None
         self._last_frame_ts = 0.0
+        # уникальный ключ для warn_limited: id(self) после GC может
+        # совпасть с адресом прежнего (мёртвого) экземпляра, и честное
+        # предупреждение новой камеры было бы подавлено 300-секундным
+        # кэшем прежней («пустое окно без записей в журнале»)
+        self._warn_key = uuid.uuid4().hex[:8]
         # диагностика последней попытки (для атрибутов камеры)
         self.last_target: str | None = None
         self.last_error: str | None = None
@@ -279,7 +285,7 @@ class BarrierStream:
                 self.last_error = type(err).__name__
                 warn_limited(
                     _LOGGER,
-                    f"frames_err_{id(self)}",
+                    f"frames_err_{self._warn_key}",
                     "Видеопоток прерван (%s), переподключение…",
                     safe_exc_text(err),
                 )
@@ -292,7 +298,7 @@ class BarrierStream:
                 # камеры пустело без единой записи в журнале
                 warn_limited(
                     _LOGGER,
-                    f"frames_api_{id(self)}",
+                    f"frames_api_{self._warn_key}",
                     "Видеопоток остановлен: %s (повтор — при следующем "
                     "открытии видео)",
                     err,
@@ -302,7 +308,7 @@ class BarrierStream:
         if attempts >= max_attempts:
             warn_limited(
                 _LOGGER,
-                f"frames_giveup_{id(self)}",
+                f"frames_giveup_{self._warn_key}",
                 "Видеопоток остановлен после %d неудачных подключений подряд "
                 "(сервер не выдал порт или отклонил соединение; повтор — при "
                 "следующем открытии видео)",
@@ -327,7 +333,7 @@ class BarrierStream:
             self.last_error = type(err).__name__
             warn_limited(
                 _LOGGER,
-                f"snapshot_err_{id(self)}",
+                f"snapshot_err_{self._warn_key}",
                 "Снимок камеры не получен: %s (если так повторяется — "
                 "видео у сервера недоступно для этого аккаунта/КПУ)",
                 safe_exc_text(err),

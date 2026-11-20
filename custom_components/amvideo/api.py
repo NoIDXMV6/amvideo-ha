@@ -146,7 +146,10 @@ class AmVideoClient:
         )
         if result.get("result") and result.get("sid"):
             self.sid = result["sid"]
-            _LOGGER.debug("Успешный вход, sid=%s…", str(self.sid)[:6])
+            # sid в журнал не попадает ни целиком, ни префиксом —
+            # журналы не должны содержать даже части идентификатора
+            # сессии (ревью HACS)
+            _LOGGER.debug("Успешный вход (type=login)")
             return self.sid
         if result.get("change_device"):
             raise AmVideoPinRequired(str(result.get("str") or "Требуется PIN"))
